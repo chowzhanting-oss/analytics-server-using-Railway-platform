@@ -41,7 +41,10 @@ def analyze():
     try:
         data = request.get_json(force=True, silent=True) or {}
         csv_text = (data.get("csv") or "").strip()
-        schema = data.get("schema") or ["userid","username","quizname","difficultysum","standarderror","measure","timetaken"]
+        schema = data.get("schema") or [
+            "userid", "username", "quizname",
+            "difficultysum", "standarderror", "measure", "timetaken"
+        ]
         dryrun = bool(data.get("dryrun", False))
         run_label = data.get("run_label") or f"manual_{time.strftime('%Y-%m-%d')}"
 
@@ -98,44 +101,45 @@ CSV data:
 {csv_text}
         """.strip()
 
---- Call OpenAI ---
-        resp = client.responses.create(
-            model=MODEL,
-            input=[
-                {"role": "system", "content": "You are a JSON-only learning analytics engine."},
-                {"role": "user", "content": prompt}
-            ]
-        )
+        # --- Call OpenAI safely (no response_format for older SDKs) ---
+        try:
+            resp = client.responses.create(
+                model=MODEL,
+                input=[
+                    {"role": "system", "content": "You are a JSON-only learning analytics engine."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+        except TypeError:
+            # fallback for very old SDKs using `client.chat.completions.create`
+            from openai import ChatCompletion
+            chat = ChatCompletion(api_key=OPENAI_API_KEY)
+            legacy = chat.create(
+                model=MODEL,
+                messages=[
+                    {"role": "system", "content": "You are a JSON-only learning analytics engine."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            text = legacy.choices[0].message["content"]
+            parsed = json.loads(text)
+            parsed.setdefault("run_label", run_label)
+            return jsonify(parsed)
 
-        # --- Parse response safely ---
+        # --- Extract model output safely ---
         text = ""
         try:
-            text = resp.output_text  # works across SDK versions
+            text = resp.output_text
         except Exception:
-            # fallback for older clients
-            text = getattr(resp, "output", [{}])[0].get("content", [{}])[0].get("text", "")
+            try:
+                text = resp.output[0].content[0].text
+            except Exception:
+                text = getattr(resp, "output_text", "")
 
+        # --- Try parsing JSON ---
         try:
             parsed = json.loads(text)
         except Exception:
-            # Try recovering from partial JSON
-            start, end = text.find("{"), text.rfind("}")
-            if start != -1 and end != -1:
-                parsed = json.loads(text[start:end+1])
-            else:
-                raise ValueError("Invalid JSON returned from model")
-
-        # --- Parse response safely ---
-        text = ""
-        try:
-            text = resp.output[0].content[0].text
-        except Exception:
-            text = getattr(resp, "output_text", "")
-
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            # Try recovering from partial JSON
             start, end = text.find("{"), text.rfind("}")
             if start != -1 and end != -1:
                 parsed = json.loads(text[start:end+1])
@@ -156,10 +160,10 @@ CSV data:
             payload["trace"] = tb
         return jsonify(payload), 500
 
+
 # ───────────────────────────────────────────────────────────────
-# 🚀 Local runner (Railway will override PORT automatically)
+# 🚀 Local runner (Railway overrides PORT automatically)
 # ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
-
