@@ -98,15 +98,32 @@ CSV data:
 {csv_text}
         """.strip()
 
-        # --- Call OpenAI ---
+--- Call OpenAI ---
         resp = client.responses.create(
             model=MODEL,
             input=[
                 {"role": "system", "content": "You are a JSON-only learning analytics engine."},
                 {"role": "user", "content": prompt}
-            ],
-            response_format={"type": "json_object"}
+            ]
         )
+
+        # --- Parse response safely ---
+        text = ""
+        try:
+            text = resp.output_text  # works across SDK versions
+        except Exception:
+            # fallback for older clients
+            text = getattr(resp, "output", [{}])[0].get("content", [{}])[0].get("text", "")
+
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            # Try recovering from partial JSON
+            start, end = text.find("{"), text.rfind("}")
+            if start != -1 and end != -1:
+                parsed = json.loads(text[start:end+1])
+            else:
+                raise ValueError("Invalid JSON returned from model")
 
         # --- Parse response safely ---
         text = ""
@@ -145,3 +162,4 @@ CSV data:
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8080))
     app.run(host="0.0.0.0", port=port, debug=False)
+
