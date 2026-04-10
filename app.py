@@ -122,6 +122,7 @@ Use the summaries below to produce a differentiated risk score for each userid.
 Compare students relative to one another.
 Do not return the same risk score for all students unless their summaries are actually identical.
 If confidence is low, still provide a best-effort score and at least one concrete driver.
+Risk score must be between 0 and 100 inclusive. Never return a negative value. Use 85, not 0.85.
 Return ONLY valid JSON.
 
 Student summaries:
@@ -152,11 +153,20 @@ Student summaries:
 
         for item in parsed["items"]:
             risk = item.get("risk_score")
-            if isinstance(risk, (int, float)):
-                if 0 <= risk <= 1:
-                    item["risk_score"] = round(risk * 100, 1)
-                else:
-                    item["risk_score"] = round(risk, 1)    
+        
+            try:
+                risk = float(risk)
+            except (TypeError, ValueError):
+                risk = 50.0
+        
+            # If model returns 0–1 scale, convert to 0–100
+            if 0 <= risk <= 1:
+                risk = risk * 100
+        
+            # Clamp to valid range
+            risk = max(0.0, min(100.0, risk))
+        
+            item["risk_score"] = round(risk, 1) 
             
         return jsonify(parsed)
 
