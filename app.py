@@ -151,12 +151,12 @@ Student summaries:
             parsed["items"] = []
 
         for item in parsed["items"]:
-        risk = item.get("risk_score")
-        if isinstance(risk, (int, float)):
-            if 0 <= risk <= 1:
-                item["risk_score"] = round(risk * 100, 1)
-            else:
-                item["risk_score"] = round(risk, 1)    
+            risk = item.get("risk_score")
+            if isinstance(risk, (int, float)):
+                if 0 <= risk <= 1:
+                    item["risk_score"] = round(risk * 100, 1)
+                else:
+                    item["risk_score"] = round(risk, 1)    
             
         return jsonify(parsed)
 
