@@ -141,19 +141,47 @@ Do not use technical field names anywhere in drivers, student_msg, or teacher_ms
 Forbidden terms include:
 avg_measure, avg_standarderror, avg_timetaken, avg_difficultysum, measure_trend, attempt_count.
 
-Use plain English instead, for example:
-- "low recent performance"
-- "few quiz attempts completed"
-- "performance has been improving"
-- "performance has been declining"
-- "high uncertainty in performance"
-- "slow completion time"
+Student messages must be:
+- written in plain English
+- specific and actionable
+- supportive but not generic
+- 1 to 2 sentences only
+- based on the student's likely learning behaviour
+- free of technical or awkward phrases
 
-Student messages must be easy for students to understand.
-Teacher messages must be practical and classroom-friendly.
+Teacher messages must be:
+- practical and classroom-friendly
+- focused on what the teacher can do next
+- 1 to 2 sentences only
+- written in plain English
+- free of technical analytics terms
+
+Do NOT use vague phrases like:
+- "keep trying"
+- "focus more on"
+- "limited engagement in quizzes"
+- "performance has been inconsistent" without explanation
+
+Instead, describe the issue clearly and suggest one concrete next step.
+
+Examples of good student messages:
+- "You have completed only a small number of quiz attempts so far. Try practising more regularly and review mistakes after each attempt."
+- "Your recent quiz results suggest that some topics are still unclear. Spend extra time revising the questions you found most difficult."
+- "Your performance has varied across attempts. Focus on understanding why mistakes happened rather than only repeating the quiz."
+
+Examples of good teacher messages:
+- "The student may need more regular quiz practice to build confidence and consistency. Encourage weekly attempts and review common mistakes together."
+- "Recent results suggest gaps in understanding of some topics. Provide targeted practice on the areas where the student struggled most."
+- "The student’s performance has been uneven across attempts. It may help to check whether they are rushing or misunderstanding key concepts."
+
+Avoid phrases such as:
+"focus more on"
+"keep trying"
+"limited engagement"
+"inconsistent performance" unless followed by a concrete explanation
 
 Student summaries:
-{json.dumps(student_summaries, ensure_ascii=False)}
+{json.dumps(friendly_summaries, ensure_ascii=False)}
         """.strip()
 
         resp = client.responses.create(
@@ -200,7 +228,13 @@ Student summaries:
             "avg_timetaken": "completion time",
             "avg_difficultysum": "difficulty of attempted questions",
             "measure_trend": "performance trend",
-            "attempt_count": "number of attempts"
+            "attempt_count": "number of attempts",
+            "recent_performance_level": "recent performance",
+            "performance_uncertainty": "uncertainty in performance",
+            "average_completion_time": "completion time",
+            "difficulty_of_attempted_questions": "difficulty of attempted questions",
+            "performance_change_over_time": "performance trend",
+            "number_of_attempts": "number of attempts"
         }
         
         def sanitize_text(text):
