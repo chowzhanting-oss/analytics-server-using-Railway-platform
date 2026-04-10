@@ -94,7 +94,10 @@ Output exactly:
   ]
 }}
 
-If data insufficient, set confidence low (~0.3) and neutral risk (~50).
+Use the available columns to produce a differentiated risk score for each userid.
+Compare students relative to one another.
+Do not return the same risk score for all students unless their records are actually identical.
+If confidence is low, still provide a best-effort score and at least one concrete driver.
 Return ONLY valid JSON — no markdown, no commentary.
 
 CSV data:
