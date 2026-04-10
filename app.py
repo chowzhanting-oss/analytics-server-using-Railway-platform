@@ -3,6 +3,8 @@ import os, json, time, traceback
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from openai import OpenAI
+import csv
+from io import StringIO
 
 # ───────────────────────────────────────────────────────────────
 # ⚙️  Configuration
@@ -15,6 +17,12 @@ app = Flask(__name__)
 CORS(app)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
+def to_float(x, default=0.0):
+    try:
+        return float(x)
+    except:
+        return default
+
 # ───────────────────────────────────────────────────────────────
 # 🩺 Health endpoint
 # ───────────────────────────────────────────────────────────────
@@ -26,17 +34,11 @@ def ping():
 # ───────────────────────────────────────────────────────────────
 # 🔍 /analyze endpoint
 # ───────────────────────────────────────────────────────────────
+
 @app.post("/analyze")
 def analyze():
     """
     Analyze adaptive quiz CSV and return JSON with student risk/confidence.
-    Expected payload:
-      {
-        "schema": [...],
-        "csv": "userid,username,quizname,difficultysum,...",
-        "run_label": "manual_2025-10-24",
-        "dryrun": true/false
-      }
     """
     try:
         data = request.get_json(force=True, silent=True) or {}
@@ -48,36 +50,58 @@ def analyze():
         dryrun = bool(data.get("dryrun", False))
         run_label = data.get("run_label") or f"manual_{time.strftime('%Y-%m-%d')}"
 
-        # --- Validation ---
         if not csv_text:
             return jsonify({"error": "Missing CSV data"}), 400
 
-        # --- Dry-run mode (for testing without token) ---
+        rows = list(csv.DictReader(StringIO(csv_text)))
+        by_user = {}
+
+        for r in rows:
+            uid = int(r.get("userid", 0) or 0)
+            by_user.setdefault(uid, []).append(r)
+
+        student_summaries = []
+        for uid, attempts in by_user.items():
+            n = len(attempts)
+            measures = [to_float(a.get("measure")) for a in attempts]
+            ses = [to_float(a.get("standarderror")) for a in attempts]
+            times = [to_float(a.get("timetaken")) for a in attempts]
+            diffs = [to_float(a.get("difficultysum")) for a in attempts]
+
+            avg_measure = sum(measures) / max(n, 1)
+            avg_se = sum(ses) / max(n, 1)
+            avg_time = sum(times) / max(n, 1)
+            avg_diff = sum(diffs) / max(n, 1)
+
+            trend = 0.0
+            if n >= 2:
+                trend = measures[-1] - measures[0]
+
+            student_summaries.append({
+                "userid": uid,
+                "attempt_count": n,
+                "avg_measure": round(avg_measure, 3),
+                "avg_standarderror": round(avg_se, 3),
+                "avg_timetaken": round(avg_time, 1),
+                "avg_difficultysum": round(avg_diff, 3),
+                "measure_trend": round(trend, 3)
+            })
+
         if dryrun or not OPENAI_API_KEY:
-            lines = [ln for ln in csv_text.splitlines() if ln.strip()]
-            hdr = lines[0].split(",") if lines else []
             items = []
-            for row in lines[1:]:
-                cols = row.split(",")
-                rec = dict(zip(hdr, cols))
-                uid = int(rec.get("userid", "0") or 0)
+            for s in student_summaries:
                 items.append({
-                    "userid": uid,
+                    "userid": s["userid"],
                     "risk_score": 50.0,
                     "confidence": 0.4,
                     "drivers": ["dry-run mode"],
                     "student_msg": "Dry-run preview.",
-                    "teacher_msg": "Dry-run: Verify Moodle ↔ Analytics link.",
-                    "features": rec
+                    "teacher_msg": "Dry-run: Verify Moodle ↔ Analytics link."
                 })
             return jsonify({"run_label": run_label, "items": items})
 
-        # --- Real LLM analysis ---
-        schema_list = ", ".join(schema)
         prompt = f"""
-You are a learning analytics model. Analyze this CSV and return JSON only.
-Columns: {schema_list}.
-Each record = 1 quiz attempt. Aggregate by userid.
+You are a learning analytics model. Analyze these per-student summaries and return JSON only.
 
 Output exactly:
 {{
@@ -85,61 +109,35 @@ Output exactly:
   "items": [
     {{
       "userid": int,
-      "risk_score": float,     # 0–100 (higher = higher risk)
-      "confidence": float,     # 0–1 (model certainty)
-      "drivers": [string],     # 1–4 short causes
-      "student_msg": string,   # actionable note for student
-      "teacher_msg": string    # actionable note for teacher
+      "risk_score": float,
+      "confidence": float,
+      "drivers": [string],
+      "student_msg": string,
+      "teacher_msg": string
     }}
   ]
 }}
 
-Use the available columns to produce a differentiated risk score for each userid.
+Use the summaries below to produce a differentiated risk score for each userid.
 Compare students relative to one another.
-Do not return the same risk score for all students unless their records are actually identical.
+Do not return the same risk score for all students unless their summaries are actually identical.
 If confidence is low, still provide a best-effort score and at least one concrete driver.
-Return ONLY valid JSON — no markdown, no commentary.
+Return ONLY valid JSON.
 
-CSV data:
-{csv_text}
+Student summaries:
+{json.dumps(student_summaries, ensure_ascii=False)}
         """.strip()
 
-        # --- Call OpenAI safely (no response_format for older SDKs) ---
-        try:
-            resp = client.responses.create(
-                model=MODEL,
-                input=[
-                    {"role": "system", "content": "You are a JSON-only learning analytics engine."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-        except TypeError:
-            # fallback for very old SDKs using `client.chat.completions.create`
-            from openai import ChatCompletion
-            chat = ChatCompletion(api_key=OPENAI_API_KEY)
-            legacy = chat.create(
-                model=MODEL,
-                messages=[
-                    {"role": "system", "content": "You are a JSON-only learning analytics engine."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            text = legacy.choices[0].message["content"]
-            parsed = json.loads(text)
-            parsed.setdefault("run_label", run_label)
-            return jsonify(parsed)
+        resp = client.responses.create(
+            model=MODEL,
+            input=[
+                {"role": "system", "content": "You are a JSON-only learning analytics engine."},
+                {"role": "user", "content": prompt}
+            ]
+        )
 
-        # --- Extract model output safely ---
-        text = ""
-        try:
-            text = resp.output_text
-        except Exception:
-            try:
-                text = resp.output[0].content[0].text
-            except Exception:
-                text = getattr(resp, "output_text", "")
+        text = getattr(resp, "output_text", "")
 
-        # --- Try parsing JSON ---
         try:
             parsed = json.loads(text)
         except Exception:
@@ -148,7 +146,6 @@ CSV data:
                 parsed = json.loads(text[start:end+1])
             else:
                 raise ValueError("Invalid JSON returned from model")
-
         parsed.setdefault("run_label", run_label)
         if not isinstance(parsed.get("items"), list):
             parsed["items"] = []
@@ -162,6 +159,7 @@ CSV data:
         if DEBUG_ERRORS:
             payload["trace"] = tb
         return jsonify(payload), 500
+
 
 
 # ───────────────────────────────────────────────────────────────
