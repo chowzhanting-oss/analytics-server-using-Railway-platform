@@ -105,12 +105,17 @@ def analyze():
         for s in student_summaries:
             friendly_summaries.append({
                 "userid": s["userid"],
-                "number_of_attempts": s["attempt_count"],
-                "recent_performance_level": s["avg_measure"],
-                "performance_uncertainty": s["avg_standarderror"],
-                "average_completion_time": s["avg_timetaken"],
-                "difficulty_of_attempted_questions": s["avg_difficultysum"],
-                "performance_change_over_time": s["measure_trend"]
+                "quiz_attempt_count": s["attempt_count"],
+                "average_ability_estimate": s["avg_measure"],
+                "average_uncertainty": s["avg_standarderror"],
+                "average_completion_time_seconds": s["avg_timetaken"],
+                "average_question_difficulty": s["avg_difficultysum"],
+                "ability_trend": s["measure_trend"],
+                "interpretation_note": (
+                    "Higher average_ability_estimate means stronger quiz performance and should reduce risk. "
+                    "More quiz attempts usually reduce risk. "
+                    "High uncertainty or harder questions alone should not make a strong student high-risk."
+                )
             })
         
         prompt = f"""
@@ -131,15 +136,36 @@ Output exactly:
   ]
 }}
 
-Use the summaries below to produce a differentiated risk score for each userid.
-Compare students relative to one another.
-Do not return the same risk score for all students unless their summaries are actually identical.
-If confidence is low, still provide a best-effort score and at least one concrete driver.
-Risk score must be between 0 and 100 inclusive. Never return a negative value. Use 85, not 0.85.
-Return ONLY valid JSON.
+Risk score meaning:
+- 0 to 20 = very low risk
+- 21 to 40 = low risk
+- 41 to 60 = moderate risk
+- 61 to 80 = high risk
+- 81 to 100 = very high risk
+
+Important scoring rules:
+1. Higher performance must LOWER risk.
+2. Lower performance must RAISE risk.
+3. More quiz attempts usually LOWER risk.
+4. Fewer quiz attempts usually RAISE risk.
+5. Improving performance over time should LOWER risk slightly.
+6. Declining performance over time should RAISE risk slightly.
+7. High uncertainty alone must NOT make a strong student high-risk.
+8. Harder attempted questions alone must NOT make a strong student high-risk.
+9. Use absolute educational meaning first. Use cohort comparison only as a secondary check.
+10. If one student is clearly performing better than another student and has similar or better engagement, the stronger student should not receive a higher risk score.
+11. Students with clearly strong performance and adequate attempts should usually score below 35.
+12. Students with clearly weak performance and limited attempts should usually score above 65.
+
+Important:
+- Do not reverse the direction of performance.
+- Do not treat strong students as high-risk.
+- Do not give nearly identical scores to clearly different students.
+- Risk score must be between 0 and 100 inclusive. Use 85, not 0.85.
+- Confidence must be between 0 and 1.
+- Return ONLY valid JSON.
+
 Do not use technical field names anywhere in drivers, student_msg, or teacher_msg.
-Forbidden terms include:
-avg_measure, avg_standarderror, avg_timetaken, avg_difficultysum, measure_trend, attempt_count.
 
 Student messages must be:
 - written in plain English
@@ -147,42 +173,24 @@ Student messages must be:
 - supportive but not generic
 - 1 to 2 sentences only
 - based on the student's likely learning behaviour
-- free of technical or awkward phrases
 
 Teacher messages must be:
 - practical and classroom-friendly
 - focused on what the teacher can do next
 - 1 to 2 sentences only
 - written in plain English
-- free of technical analytics terms
 
-Do NOT use vague phrases like:
+Avoid vague phrases such as:
 - "keep trying"
 - "focus more on"
-- "limited engagement in quizzes"
-- "performance has been inconsistent" without explanation
+- "limited engagement"
+- "inconsistent performance"
 
-Instead, describe the issue clearly and suggest one concrete next step.
-
-Examples of good student messages:
-- "You have completed only a small number of quiz attempts so far. Try practising more regularly and review mistakes after each attempt."
-- "Your recent quiz results suggest that some topics are still unclear. Spend extra time revising the questions you found most difficult."
-- "Your performance has varied across attempts. Focus on understanding why mistakes happened rather than only repeating the quiz."
-
-Examples of good teacher messages:
-- "The student may need more regular quiz practice to build confidence and consistency. Encourage weekly attempts and review common mistakes together."
-- "Recent results suggest gaps in understanding of some topics. Provide targeted practice on the areas where the student struggled most."
-- "The student’s performance has been uneven across attempts. It may help to check whether they are rushing or misunderstanding key concepts."
-
-Avoid phrases such as:
-"focus more on"
-"keep trying"
-"limited engagement"
-"inconsistent performance" unless followed by a concrete explanation
+Instead, explain what seems to be happening and suggest one next step.
 
 Student summaries:
 {json.dumps(friendly_summaries, ensure_ascii=False)}
-        """.strip()
+""".strip()
 
         resp = client.responses.create(
             model=MODEL,
