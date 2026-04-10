@@ -123,11 +123,28 @@ Compare students relative to one another.
 Do not return the same risk score for all students unless their summaries are actually identical.
 If confidence is low, still provide a best-effort score and at least one concrete driver.
 Risk score must be between 0 and 100 inclusive. Never return a negative value. Use 85, not 0.85.
+
+Drivers must be human-readable explanations, not technical variable names.
+Do NOT use terms like avg_measure, attempt_count, avg_difficultysum, avg_standarderror, or measure_trend.
+Instead, write short phrases such as:
+- "low recent performance"
+- "few quiz attempts completed"
+- "performance has been declining"
+- "high uncertainty in understanding"
+- "slow completion time"
+
+Student messages and teacher messages must also be natural and understandable.
+Do not mention internal feature names.
+
+Student messages should sound supportive and easy to understand.
+Teacher messages should be practical and classroom-friendly.
+Avoid technical analytics terms.
+
 Return ONLY valid JSON.
 
 Student summaries:
 {json.dumps(student_summaries, ensure_ascii=False)}
-        """.strip()
+""".strip()
 
         resp = client.responses.create(
             model=MODEL,
@@ -167,7 +184,24 @@ Student summaries:
             risk = max(0.0, min(100.0, risk))
         
             item["risk_score"] = round(risk, 1) 
-            
+
+        driver_map = {
+            "avg_measure": "low recent performance",
+            "attempt_count": "few quiz attempts completed",
+            "avg_difficultysum": "difficulty handling challenging questions",
+            "avg_standarderror": "high uncertainty in understanding",
+            "measure_trend": "performance has been declining",
+            "avg_timetaken": "slow completion time"
+        }
+        
+        for item in parsed["items"]:
+            if isinstance(item.get("drivers"), list):
+                friendly = []
+                for d in item["drivers"]:
+                    if isinstance(d, str):
+                        friendly.append(driver_map.get(d, d))
+                item["drivers"] = friendly
+
         return jsonify(parsed)
 
     except Exception as e:
