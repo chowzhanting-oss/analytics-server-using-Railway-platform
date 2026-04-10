@@ -214,6 +214,73 @@ Student summaries:
         if not isinstance(parsed.get("items"), list):
             parsed["items"] = []
 
+        if risk_is_likely_inverted(parsed["items"], student_summaries):
+            repair_prompt = f"""
+        The previous output likely inverted the risk ordering.
+        
+        Correct the scores using these rules:
+        - higher performance must lower risk
+        - lower performance must raise risk
+        - more attempts usually lower risk
+        - fewer attempts usually raise risk
+        - high uncertainty alone must not make a strong student high-risk
+        
+        Return the same JSON format again, fully corrected.
+        
+        Student summaries:
+        {json.dumps(friendly_summaries, ensure_ascii=False)}
+        """.strip()
+        
+            resp = client.responses.create(
+                model=MODEL,
+                input=[
+                    {"role": "system", "content": "You are a JSON-only learning analytics engine."},
+                    {"role": "user", "content": repair_prompt}
+                ]
+            )
+        
+            text = getattr(resp, "output_text", "")
+        
+            try:
+                parsed = json.loads(text)
+            except Exception:
+                start, end = text.find("{"), text.rfind("}")
+                if start != -1 and end != -1:
+                    parsed = json.loads(text[start:end+1])
+                else:
+                    raise ValueError("Invalid JSON returned from model on retry")
+        
+            parsed.setdefault("run_label", run_label)
+            if not isinstance(parsed.get("items"), list):
+                parsed["items"] = []
+
+        def risk_is_likely_inverted(items, summaries):
+            by_user = {s["userid"]: s for s in summaries}
+            pairs = [i for i in items if i.get("userid") in by_user]
+        
+            if len(pairs) < 2:
+                return False
+        
+            def measure_of(item):
+                return by_user[item["userid"]]["avg_measure"]
+        
+            strongest = max(pairs, key=measure_of)
+            weakest = min(pairs, key=measure_of)
+        
+            strong_measure = by_user[strongest["userid"]]["avg_measure"]
+            weak_measure = by_user[weakest["userid"]]["avg_measure"]
+        
+            strong_attempts = by_user[strongest["userid"]]["attempt_count"]
+            weak_attempts = by_user[weakest["userid"]]["attempt_count"]
+        
+            strong_risk = float(strongest.get("risk_score", 50))
+            weak_risk = float(weakest.get("risk_score", 50))
+        
+            if strong_measure > weak_measure and strong_attempts >= weak_attempts and strong_risk > weak_risk + 15:
+                return True
+        
+            return False
+
         for item in parsed["items"]:
             risk = item.get("risk_score")
         
