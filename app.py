@@ -124,7 +124,33 @@ Do not return the same risk score for all students unless their summaries are ac
 If confidence is low, still provide a best-effort score and at least one concrete driver.
 Risk score must be between 0 and 100 inclusive. Never return a negative value. Use 85, not 0.85.
 Return ONLY valid JSON.
-Please avoid using any analytic terms for student and teacher message
+Do not use technical field names anywhere in drivers, student_msg, or teacher_msg.
+Forbidden terms include:
+avg_measure, avg_standarderror, avg_timetaken, avg_difficultysum, measure_trend, attempt_count.
+
+Use plain English instead, for example:
+- "low recent performance"
+- "few quiz attempts completed"
+- "performance has been improving"
+- "performance has been declining"
+- "high uncertainty in performance"
+- "slow completion time"
+
+Student messages must be easy for students to understand.
+Teacher messages must be practical and classroom-friendly.
+
+friendly_summaries = []
+
+for s in student_summaries:
+    friendly_summaries.append({
+        "userid": s["userid"],
+        "number_of_attempts": s["attempt_count"],
+        "recent_performance_level": s["avg_measure"],
+        "performance_uncertainty": s["avg_standarderror"],
+        "average_completion_time": s["avg_timetaken"],
+        "difficulty_of_attempted_questions": s["avg_difficultysum"],
+        "performance_change_over_time": s["measure_trend"]
+    })
 
 Student summaries:
 {json.dumps(student_summaries, ensure_ascii=False)}
@@ -168,7 +194,33 @@ Student summaries:
             risk = max(0.0, min(100.0, risk))
         
             item["risk_score"] = round(risk, 1) 
-            
+        term_map = {
+            "avg_measure": "recent performance",
+            "avg_standarderror": "uncertainty in performance",
+            "avg_timetaken": "completion time",
+            "avg_difficultysum": "difficulty of attempted questions",
+            "measure_trend": "performance trend",
+            "attempt_count": "number of attempts"
+        }
+        
+        def sanitize_text(text):
+            if not isinstance(text, str):
+                return text
+            for old, new in term_map.items():
+                text = text.replace(old, new)
+            return text
+        
+        for item in parsed["items"]:
+            item["student_msg"] = sanitize_text(item.get("student_msg"))
+            item["teacher_msg"] = sanitize_text(item.get("teacher_msg"))
+        
+            if isinstance(item.get("drivers"), list):
+                cleaned = []
+                for d in item["drivers"]:
+                    if isinstance(d, str):
+                        cleaned.append(sanitize_text(d))
+                item["drivers"] = cleaned
+
         return jsonify(parsed)
 
     except Exception as e:
