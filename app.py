@@ -100,6 +100,19 @@ def analyze():
                 })
             return jsonify({"run_label": run_label, "items": items})
 
+        friendly_summaries = []
+
+        for s in student_summaries:
+            friendly_summaries.append({
+                "userid": s["userid"],
+                "number_of_attempts": s["attempt_count"],
+                "recent_performance_level": s["avg_measure"],
+                "performance_uncertainty": s["avg_standarderror"],
+                "average_completion_time": s["avg_timetaken"],
+                "difficulty_of_attempted_questions": s["avg_difficultysum"],
+                "performance_change_over_time": s["measure_trend"]
+            })
+        
         prompt = f"""
 You are a learning analytics model. Analyze these per-student summaries and return JSON only.
 
@@ -138,19 +151,6 @@ Use plain English instead, for example:
 
 Student messages must be easy for students to understand.
 Teacher messages must be practical and classroom-friendly.
-
-friendly_summaries = []
-
-for s in student_summaries:
-    friendly_summaries.append({
-        "userid": s["userid"],
-        "number_of_attempts": s["attempt_count"],
-        "recent_performance_level": s["avg_measure"],
-        "performance_uncertainty": s["avg_standarderror"],
-        "average_completion_time": s["avg_timetaken"],
-        "difficulty_of_attempted_questions": s["avg_difficultysum"],
-        "performance_change_over_time": s["measure_trend"]
-    })
 
 Student summaries:
 {json.dumps(student_summaries, ensure_ascii=False)}
