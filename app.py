@@ -7,7 +7,7 @@ import csv
 from io import StringIO
 
 # ───────────────────────────────────────────────────────────────
-# ⚙️  Configuration
+# ⚙️ Configuration
 # ───────────────────────────────────────────────────────────────
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
@@ -23,23 +23,67 @@ def to_float(x, default=0.0):
     except:
         return default
 
+def normalize_risk_value(risk):
+    try:
+        risk = float(risk)
+    except (TypeError, ValueError):
+        risk = 50.0
+
+    # If model returns 0–1 scale, convert to 0–100
+    if 0 <= risk <= 1:
+        risk = risk * 100
+
+    return round(max(0.0, min(100.0, risk)), 1)
+
+def risk_is_likely_inverted(items, summaries):
+    by_user = {s["userid"]: s for s in summaries}
+    pairs = [i for i in items if i.get("userid") in by_user]
+
+    if len(pairs) < 2:
+        return False
+
+    def measure_of(item):
+        return by_user[item["userid"]]["avg_measure"]
+
+    strongest = max(pairs, key=measure_of)
+    weakest = min(pairs, key=measure_of)
+
+    strong_measure = by_user[strongest["userid"]]["avg_measure"]
+    weak_measure = by_user[weakest["userid"]]["avg_measure"]
+
+    strong_attempts = by_user[strongest["userid"]]["attempt_count"]
+    weak_attempts = by_user[weakest["userid"]]["attempt_count"]
+
+    strong_risk = normalize_risk_value(strongest.get("risk_score", 50))
+    weak_risk = normalize_risk_value(weakest.get("risk_score", 50))
+
+    return (
+        strong_measure > weak_measure
+        and strong_attempts >= weak_attempts
+        and strong_risk > weak_risk + 15
+    )
+
+def parse_json_from_model_text(text, retry_label="model"):
+    try:
+        return json.loads(text)
+    except Exception:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end != -1:
+            return json.loads(text[start:end+1])
+        raise ValueError(f"Invalid JSON returned from {retry_label}")
+
 # ───────────────────────────────────────────────────────────────
 # 🩺 Health endpoint
 # ───────────────────────────────────────────────────────────────
 @app.get("/ping")
 def ping():
-    """Simple health check endpoint."""
     return jsonify({"status": "ok", "model": MODEL})
 
 # ───────────────────────────────────────────────────────────────
 # 🔍 /analyze endpoint
 # ───────────────────────────────────────────────────────────────
-
 @app.post("/analyze")
 def analyze():
-    """
-    Analyze adaptive quiz CSV and return JSON with student risk/confidence.
-    """
     try:
         data = request.get_json(force=True, silent=True) or {}
         csv_text = (data.get("csv") or "").strip()
@@ -101,7 +145,6 @@ def analyze():
             return jsonify({"run_label": run_label, "items": items})
 
         friendly_summaries = []
-
         for s in student_summaries:
             friendly_summaries.append({
                 "userid": s["userid"],
@@ -117,7 +160,7 @@ def analyze():
                     "High uncertainty or harder questions alone should not make a strong student high-risk."
                 )
             })
-        
+
         prompt = f"""
 You are a learning analytics model. Analyze these per-student summaries and return JSON only.
 
@@ -201,36 +244,32 @@ Student summaries:
         )
 
         text = getattr(resp, "output_text", "")
+        parsed = parse_json_from_model_text(text, "model")
 
-        try:
-            parsed = json.loads(text)
-        except Exception:
-            start, end = text.find("{"), text.rfind("}")
-            if start != -1 and end != -1:
-                parsed = json.loads(text[start:end+1])
-            else:
-                raise ValueError("Invalid JSON returned from model")
         parsed.setdefault("run_label", run_label)
         if not isinstance(parsed.get("items"), list):
             parsed["items"] = []
 
+        for item in parsed["items"]:
+            item["risk_score"] = normalize_risk_value(item.get("risk_score"))
+
         if risk_is_likely_inverted(parsed["items"], student_summaries):
             repair_prompt = f"""
-        The previous output likely inverted the risk ordering.
-        
-        Correct the scores using these rules:
-        - higher performance must lower risk
-        - lower performance must raise risk
-        - more attempts usually lower risk
-        - fewer attempts usually raise risk
-        - high uncertainty alone must not make a strong student high-risk
-        
-        Return the same JSON format again, fully corrected.
-        
-        Student summaries:
-        {json.dumps(friendly_summaries, ensure_ascii=False)}
-        """.strip()
-        
+The previous output likely inverted the risk ordering.
+
+Correct the scores using these rules:
+- higher performance must lower risk
+- lower performance must raise risk
+- more attempts usually lower risk
+- fewer attempts usually raise risk
+- high uncertainty alone must not make a strong student high-risk
+
+Return the same JSON format again, fully corrected.
+
+Student summaries:
+{json.dumps(friendly_summaries, ensure_ascii=False)}
+""".strip()
+
             resp = client.responses.create(
                 model=MODEL,
                 input=[
@@ -238,65 +277,17 @@ Student summaries:
                     {"role": "user", "content": repair_prompt}
                 ]
             )
-        
+
             text = getattr(resp, "output_text", "")
-        
-            try:
-                parsed = json.loads(text)
-            except Exception:
-                start, end = text.find("{"), text.rfind("}")
-                if start != -1 and end != -1:
-                    parsed = json.loads(text[start:end+1])
-                else:
-                    raise ValueError("Invalid JSON returned from model on retry")
-        
+            parsed = parse_json_from_model_text(text, "model on retry")
+
             parsed.setdefault("run_label", run_label)
             if not isinstance(parsed.get("items"), list):
                 parsed["items"] = []
 
-        def risk_is_likely_inverted(items, summaries):
-            by_user = {s["userid"]: s for s in summaries}
-            pairs = [i for i in items if i.get("userid") in by_user]
-        
-            if len(pairs) < 2:
-                return False
-        
-            def measure_of(item):
-                return by_user[item["userid"]]["avg_measure"]
-        
-            strongest = max(pairs, key=measure_of)
-            weakest = min(pairs, key=measure_of)
-        
-            strong_measure = by_user[strongest["userid"]]["avg_measure"]
-            weak_measure = by_user[weakest["userid"]]["avg_measure"]
-        
-            strong_attempts = by_user[strongest["userid"]]["attempt_count"]
-            weak_attempts = by_user[weakest["userid"]]["attempt_count"]
-        
-            strong_risk = float(strongest.get("risk_score", 50))
-            weak_risk = float(weakest.get("risk_score", 50))
-        
-            if strong_measure > weak_measure and strong_attempts >= weak_attempts and strong_risk > weak_risk + 15:
-                return True
-        
-            return False
+            for item in parsed["items"]:
+                item["risk_score"] = normalize_risk_value(item.get("risk_score"))
 
-        for item in parsed["items"]:
-            risk = item.get("risk_score")
-        
-            try:
-                risk = float(risk)
-            except (TypeError, ValueError):
-                risk = 50.0
-        
-            # If model returns 0–1 scale, convert to 0–100
-            if 0 <= risk <= 1:
-                risk = risk * 100
-        
-            # Clamp to valid range
-            risk = max(0.0, min(100.0, risk))
-        
-            item["risk_score"] = round(risk, 1) 
         term_map = {
             "avg_measure": "recent performance",
             "avg_standarderror": "uncertainty in performance",
@@ -309,20 +300,26 @@ Student summaries:
             "average_completion_time": "completion time",
             "difficulty_of_attempted_questions": "difficulty of attempted questions",
             "performance_change_over_time": "performance trend",
-            "number_of_attempts": "number of attempts"
+            "number_of_attempts": "number of attempts",
+            "quiz_attempt_count": "number of attempts",
+            "average_ability_estimate": "recent performance",
+            "average_uncertainty": "uncertainty in performance",
+            "average_completion_time_seconds": "completion time",
+            "average_question_difficulty": "difficulty of attempted questions",
+            "ability_trend": "performance trend"
         }
-        
+
         def sanitize_text(text):
             if not isinstance(text, str):
                 return text
             for old, new in term_map.items():
                 text = text.replace(old, new)
             return text
-        
+
         for item in parsed["items"]:
             item["student_msg"] = sanitize_text(item.get("student_msg"))
             item["teacher_msg"] = sanitize_text(item.get("teacher_msg"))
-        
+
             if isinstance(item.get("drivers"), list):
                 cleaned = []
                 for d in item["drivers"]:
@@ -339,8 +336,6 @@ Student summaries:
         if DEBUG_ERRORS:
             payload["trace"] = tb
         return jsonify(payload), 500
-
-
 
 # ───────────────────────────────────────────────────────────────
 # 🚀 Local runner (Railway overrides PORT automatically)
